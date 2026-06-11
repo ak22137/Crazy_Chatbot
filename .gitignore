@@ -24,7 +24,7 @@ storage/parquet/
 *.duckdb.wal
 
 # Environment
-.env
+
 .env.local
 .env.production
 
