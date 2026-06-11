@@ -1,0 +1,105 @@
+"""
+LLM Prompt templates.
+All prompts for intent classification, SQL generation, repair, and response formatting.
+"""
+
+INTENT_CLASSIFICATION = """You are an intent classifier for a data analytics chatbot.
+The user has uploaded Excel/CSV files and is asking questions about their data.
+
+Classify the user's question into exactly ONE category:
+
+- SQL_ANALYTICS: Questions that require counting, filtering, grouping, averaging, ranking, summing, comparing, or any data calculations. Examples: "How many?", "Average salary", "Top 10", "Count of", "Total", "List all where", "Compare", "Trend"
+- METADATA: Questions about what data is available, what tables exist, what columns are in a table, schema questions. Examples: "What tables do I have?", "Show me the columns", "What data is available?"
+- GREETING: Greetings, help requests, or general conversation. Examples: "Hello", "Help", "What can you do?"
+
+Available tables and their columns:
+{schema_context}
+
+User question: {question}
+
+Respond with ONLY a JSON object:
+{{"intent": "SQL_ANALYTICS" or "METADATA" or "GREETING", "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
+
+
+TABLE_SELECTION = """You are a data analyst. Given the user's question and the available tables, select which tables are needed to answer the question.
+
+Available tables:
+{table_summaries}
+
+User question: {question}
+
+Respond with ONLY a JSON object:
+{{"tables": ["table_name1", "table_name2"], "reason": "brief explanation"}}"""
+
+
+SQL_GENERATION = """You are a DuckDB SQL expert. Generate a SQL query to answer the user's question.
+
+IMPORTANT RULES:
+1. Use DuckDB SQL dialect (very similar to PostgreSQL).
+2. ONLY generate SELECT queries. Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE.
+3. Always quote table and column names with double quotes if they contain special characters.
+4. Use the exact table and column names provided below.
+5. If unsure about a column name, use the semantic dictionary hints.
+
+Available schema:
+{schema_context}
+
+Relationships between tables:
+{relationships}
+
+Semantic hints (columns that mean the same thing):
+{semantic_hints}
+
+User question: {question}
+
+Respond with ONLY a JSON object:
+{{"sql": "SELECT ...", "explanation": "brief explanation of what this query does"}}"""
+
+
+SQL_REPAIR = """The SQL query you generated failed with an error. Fix it.
+
+Original question: {question}
+
+Schema context:
+{schema_context}
+
+Failed SQL:
+{failed_sql}
+
+Error message:
+{error}
+
+Generate a corrected query. Respond with ONLY a JSON object:
+{{"sql": "SELECT ...", "explanation": "what was wrong and how you fixed it"}}"""
+
+
+RESPONSE_FORMAT = """You are a helpful data analyst assistant. Given the user's question, the SQL query that was executed, and the results, provide a clear and helpful natural language response.
+
+User question: {question}
+
+SQL query executed:
+{sql}
+
+Query results (as table):
+{results}
+
+Row count: {row_count}
+
+Instructions:
+- Provide a direct, conversational answer to the question.
+- Reference specific numbers from the results.
+- If the results are a table with multiple rows, summarize the key findings.
+- Format numbers nicely (use commas for thousands).
+- Be concise but complete.
+- If the query returned no results, say so clearly.
+- Do NOT include the SQL query in your response unless the user asked for it."""
+
+
+METADATA_RESPONSE = """You are a helpful data analyst assistant. The user is asking about their uploaded data.
+
+Available data:
+{metadata}
+
+User question: {question}
+
+Provide a clear, helpful response describing the available data. Be specific about table names, column names, row counts, and data types."""
