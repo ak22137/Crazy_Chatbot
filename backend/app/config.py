@@ -6,6 +6,8 @@ Uses pydantic-settings for validated, typed config.
 from pydantic_settings import BaseSettings
 from pathlib import Path
 
+ROOT_DIR = Path(__file__).resolve().parents[2]
+
 
 class Settings(BaseSettings):
     # Mistral AI
@@ -27,7 +29,11 @@ class Settings(BaseSettings):
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ROOT_DIR / ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     def ensure_dirs(self):
         """Create storage directories if they don't exist."""

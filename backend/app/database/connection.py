@@ -97,18 +97,19 @@ def get_write_connection() -> duckdb.DuckDBPyConnection:
 
 
 def get_read_connection() -> duckdb.DuckDBPyConnection:
-    """Get a read-only connection for query execution. Caller must close it."""
-    return duckdb.connect(settings.duckdb_path, read_only=True)
+    """Get the shared connection for query execution."""
+    return get_write_connection()
 
 
 @contextmanager
 def read_connection():
-    """Context manager for read-only connections."""
+    """Context manager for read operations.
+
+    DuckDB rejects opening the same file with a different configuration while
+    the app's long-lived write connection is active, so reads share it.
+    """
     conn = get_read_connection()
-    try:
-        yield conn
-    finally:
-        conn.close()
+    yield conn
 
 
 def close_all():
