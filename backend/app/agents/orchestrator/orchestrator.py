@@ -150,7 +150,7 @@ def handle_question(
         )
         response_data["answer"] = chat(
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            temperature=0,
             max_tokens=1024,
         )
         # Update cache
@@ -176,7 +176,7 @@ def handle_question(
             )
             response_data["answer"] = chat(
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
+                temperature=0,
                 max_tokens=1024,
             )
             # Update cache with successful result
@@ -213,7 +213,7 @@ def handle_question(
             )
             response_data["answer"] = chat(
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
+                temperature=0,
                 max_tokens=1024,
             )
             cache.update(
