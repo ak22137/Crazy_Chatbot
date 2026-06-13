@@ -421,6 +421,8 @@ a:hover { color: var(--accent-light); }
   margin-top: var(--space-3);
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 .data-table {
@@ -461,6 +463,36 @@ a:hover { color: var(--accent-light); }
 
 .data-table tr:last-child td {
   border-bottom: none;
+}
+
+/* Inline code in message text */
+.inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  color: var(--accent-light);
+}
+
+/* Markdown headings inside messages */
+.md-heading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: var(--space-3) 0 var(--space-1);
+  line-height: 1.3;
+}
+
+/* Ordered list */
+.message-content ol {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-6);
+  list-style-type: decimal;
+}
+
+.message-content ol li {
+  margin-bottom: var(--space-1);
 }
 
 /* --- Chat Input --- */
@@ -581,10 +613,7 @@ a:hover { color: var(--accent-light); }
 }
 
 .upload-zone input[type="file"] {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
+  display: none;
 }
 
 /* --- Upload Progress --- */

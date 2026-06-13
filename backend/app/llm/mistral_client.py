@@ -1,23 +1,16 @@
 """
-Mistral AI client wrapper.
-Provides chat completion and streaming using mistral-small-latest.
+LLM client wrapper using Siemens chat completions API.
 """
 
 import json
 import logging
-from mistralai import Mistral
+import re
+
+import requests
+
 from app.config import settings
 
 logger = logging.getLogger(__name__)
-
-_client: Mistral | None = None
-
-
-def _get_client() -> Mistral:
-    global _client
-    if _client is None:
-        _client = Mistral(api_key=settings.mistral_api_key)
-    return _client
 
 
 def chat(
@@ -26,30 +19,43 @@ def chat(
     max_tokens: int = 2048,
     json_mode: bool = False,
 ) -> str:
-    """
-    Send a chat completion request to Mistral.
-
-    Args:
-        messages: List of {"role": "...", "content": "..."} dicts.
-        temperature: Sampling temperature (0 = deterministic).
-        max_tokens: Maximum response tokens.
-        json_mode: If True, request JSON output.
-
-    Returns:
-        The assistant's response text.
-    """
-    client = _get_client()
-    kwargs = {
-        "model": settings.mistral_model,
+    """Send a chat completion request to the configured LLM API."""
+    payload = {
+        "model": settings.llm_model_name,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
     if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
+        payload["response_format"] = {"type": "json_object"}
 
-    response = client.chat.complete(**kwargs)
-    return response.choices[0].message.content
+    headers = {
+        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    response = requests.post(
+        settings.llm_api_url,
+        headers=headers,
+        json=payload,
+        timeout=settings.llm_timeout_sec,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as e:
+        logger.error(f"Unexpected LLM response shape: {data}")
+        raise ValueError("LLM response missing choices[0].message.content") from e
+
+    if isinstance(content, list):
+        # Some providers return content parts instead of one string.
+        return "".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    return str(content)
 
 
 async def chat_stream(
@@ -57,41 +63,56 @@ async def chat_stream(
     temperature: float = 0.1,
     max_tokens: int = 2048,
 ):
-    """
-    Stream a chat completion response from Mistral, yielding tokens.
-
-    Yields:
-        str: Individual token strings.
-    """
-    client = _get_client()
-    response = client.chat.stream(
-        model=settings.mistral_model,
+    """Lightweight streaming helper by chunking a non-streamed response."""
+    full_text = chat(
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
     )
-
-    for event in response:
-        if event.data.choices and event.data.choices[0].delta.content:
-            yield event.data.choices[0].delta.content
+    for token in full_text.split(" "):
+        yield token + " "
 
 
 def parse_json_response(text: str) -> dict:
-    """
-    Extract and parse JSON from an LLM response.
-    Handles responses wrapped in ```json ... ``` blocks.
+    """Extract and parse JSON from an LLM response.
+
+    Handles plain JSON, fenced JSON blocks, and responses with extra prose.
     """
     text = text.strip()
-    # Remove markdown code fences
-    if text.startswith("```"):
-        lines = text.split('\n')
-        lines = lines[1:]  # Remove opening fence
-        if lines and lines[-1].strip() == '```':
-            lines = lines[:-1]
-        text = '\n'.join(lines)
+    if not text:
+        return {}
 
+    # Remove markdown fences like ```json ... ``` if present.
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+
+    # First attempt: direct JSON parse.
     try:
         return json.loads(text)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON from LLM response: {e}\nText: {text[:500]}")
-        return {}
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: parse the first JSON object substring.
+    if "{" in text and "}" in text:
+        start = text.find("{")
+        end = text.rfind("}")
+        candidate = text[start:end + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    # Last fallback: scan for fenced JSON blocks anywhere in text.
+    for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", text, flags=re.IGNORECASE):
+        candidate = match.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+
+    logger.error(f"Failed to parse JSON from LLM response. Text: {text[:500]}")
+    return {}

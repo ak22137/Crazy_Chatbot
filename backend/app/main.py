@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     get_write_connection()  # Initialize DB + metadata tables
     logger.info("🚀 Excel Intelligence backend started")
     logger.info(f"   DuckDB: {settings.duckdb_path}")
-    logger.info(f"   Mistral Model: {settings.mistral_model}")
+    logger.info(f"   LLM Model: {settings.llm_model_name}")
 
     yield
 
@@ -66,4 +66,4 @@ app.include_router(metadata_router, prefix="/api/v1")
 @app.get("/api/v1/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "model": settings.mistral_model}
+    return {"status": "healthy", "model": settings.llm_model_name}

@@ -8,6 +8,7 @@ import json
 import time
 import uuid
 import logging
+import re
 from dataclasses import dataclass, field
 
 import duckdb
@@ -21,6 +22,66 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 MAX_RESULT_ROWS = 200
+
+
+def _extract_sql_from_text(text: str) -> str:
+    """Best-effort SQL extraction from non-JSON model responses."""
+    if not text:
+        return ""
+
+    raw = text.strip()
+
+    # Prefer SQL fenced block.
+    fenced = re.search(r"```(?:sql)?\s*([\s\S]*?)\s*```", raw, flags=re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1).strip()
+        if candidate.lower().startswith(("select", "with")):
+            return candidate.rstrip(";")
+
+    # Fallback: first WITH... or SELECT... statement.
+    stmt_match = re.search(r"(?is)\b(with|select)\b[\s\S]*", raw)
+    if not stmt_match:
+        return ""
+
+    candidate = stmt_match.group(0).strip()
+    # If model returned extra explanation after SQL, keep only until first semicolon.
+    if ";" in candidate:
+        candidate = candidate.split(";", 1)[0]
+
+    return candidate.strip()
+
+
+def _extract_sql_from_parsed(parsed: dict | list | str | None) -> str:
+    """Extract SQL from parsed JSON using common key variants and nested objects."""
+    if parsed is None:
+        return ""
+
+    if isinstance(parsed, str):
+        return _extract_sql_from_text(parsed)
+
+    if isinstance(parsed, list):
+        for item in parsed:
+            sql = _extract_sql_from_parsed(item)
+            if sql:
+                return sql
+        return ""
+
+    if not isinstance(parsed, dict):
+        return ""
+
+    for key in ("sql", "query", "sql_query", "statement"):
+        value = parsed.get(key)
+        if isinstance(value, str):
+            sql = _extract_sql_from_text(value)
+            if sql:
+                return sql
+
+    for value in parsed.values():
+        sql = _extract_sql_from_parsed(value)
+        if sql:
+            return sql
+
+    return ""
 
 
 @dataclass
@@ -59,8 +120,16 @@ class SQLResult:
         return "\n".join(lines)
 
 
-def _build_schema_context(metadata: dict, tables: list[str] | None = None) -> str:
-    """Build a concise schema string for the LLM prompt."""
+def _build_schema_context(
+    metadata: dict,
+    conn: duckdb.DuckDBPyConnection | None = None,
+    tables: list[str] | None = None,
+) -> str:
+    """Build a concise schema string for the LLM prompt.
+
+    For low-cardinality string columns, the actual distinct values are
+    listed so the LLM can filter correctly (e.g. status / workflow columns).
+    """
     lines = []
     for tbl_name, tbl_info in metadata.items():
         if tables and tbl_name not in tables:
@@ -68,13 +137,41 @@ def _build_schema_context(metadata: dict, tables: list[str] | None = None) -> st
         cols = []
         for col_name, col_info in tbl_info["columns"].items():
             pk = " [PK]" if col_info.get("primary_key") else ""
-            samples = col_info.get("sample_values", [])
-            sample_str = f" (e.g., {', '.join(samples[:3])})" if samples else ""
-            cols.append(f"  - {col_name}: {col_info['type']}{pk}{sample_str}")
+            dtype = col_info["type"]
+            distinct = col_info.get("distinct_count", 0) or 0
+
+            extra = ""
+            if conn is not None and dtype == "string" and 0 < distinct <= 30:
+                values = _get_distinct_values(conn, tbl_name, col_name, limit=30)
+                if values:
+                    extra = f" — allowed values: {', '.join(values)}"
+            if not extra:
+                samples = col_info.get("sample_values", [])
+                sample_str = f" (e.g., {', '.join(samples[:3])})" if samples else ""
+                extra = sample_str
+
+            cols.append(f"  - {col_name}: {dtype}{pk}{extra}")
         lines.append(f"Table: {tbl_name} ({tbl_info['row_count']} rows)")
         lines.extend(cols)
         lines.append("")
     return "\n".join(lines)
+
+
+def _get_distinct_values(
+    conn: duckdb.DuckDBPyConnection,
+    table_name: str,
+    column_name: str,
+    limit: int = 30,
+) -> list[str]:
+    """Fetch distinct non-null values for a low-cardinality column."""
+    try:
+        rows = conn.execute(
+            f'SELECT DISTINCT "{column_name}" FROM "{table_name}" '
+            f'WHERE "{column_name}" IS NOT NULL LIMIT {limit}'
+        ).fetchall()
+        return [str(r[0]) for r in rows if r[0] is not None and str(r[0]).strip() != ""]
+    except Exception:
+        return []
 
 
 def _build_table_summaries(metadata: dict) -> str:
@@ -182,7 +279,7 @@ def run_sql_agent(
 
     # 2. Select relevant tables
     selected_tables = _select_tables(question, metadata)
-    schema_context = _build_schema_context(metadata, selected_tables)
+    schema_context = _build_schema_context(metadata, read_conn, selected_tables)
 
     # 3. Get relationships and semantic hints
     relationships_ctx = _get_relationships_context(read_conn)
@@ -204,8 +301,28 @@ def run_sql_agent(
     )
 
     parsed = parse_json_response(response)
-    sql = parsed.get("sql", "")
+    sql = _extract_sql_from_parsed(parsed) or _extract_sql_from_text(response)
     explanation = parsed.get("explanation", "")
+
+    if not sql:
+        # One-shot normalization fallback for providers that ignore json_mode.
+        normalize_prompt = (
+            "Return ONLY valid JSON with keys sql and explanation. "
+            "The sql must be a DuckDB SELECT query.\n"
+            f"Original question: {question}\n"
+            f"Schema context:\n{schema_context}\n"
+            f"Previous model output:\n{response}"
+        )
+        normalized = chat(
+            messages=[{"role": "user", "content": normalize_prompt}],
+            temperature=0.0,
+            max_tokens=1024,
+            json_mode=True,
+        )
+        normalized_parsed = parse_json_response(normalized)
+        sql = _extract_sql_from_parsed(normalized_parsed) or _extract_sql_from_text(normalized)
+        if not explanation:
+            explanation = normalized_parsed.get("explanation", "") if isinstance(normalized_parsed, dict) else ""
 
     if not sql:
         return SQLResult(success=False, error="LLM did not generate a SQL query.", explanation=explanation)
@@ -309,6 +426,6 @@ def _repair_sql(question: str, schema_context: str, failed_sql: str, error: str)
     )
 
     parsed = parse_json_response(response)
-    new_sql = parsed.get("sql", failed_sql)
+    new_sql = _extract_sql_from_parsed(parsed) or _extract_sql_from_text(response) or failed_sql
     logger.info(f"Repaired SQL: {new_sql}")
     return new_sql

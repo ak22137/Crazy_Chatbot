@@ -10,9 +10,11 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    # Mistral AI
-    mistral_api_key: str = ""
-    mistral_model: str = "mistral-small-latest"
+    # LLM provider (Siemens API)
+    llm_api_url: str = "https://api.siemens.com/llm/v1/chat/completions"
+    llm_api_key: str = ""
+    llm_model_name: str = "gpt-oss-120b"
+    llm_timeout_sec: int = 60
 
     # DuckDB
     duckdb_path: str = "./storage/analytics.duckdb"

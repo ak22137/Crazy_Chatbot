@@ -40,6 +40,29 @@ IMPORTANT RULES:
 3. Always quote table and column names with double quotes if they contain special characters.
 4. Use the exact table and column names provided below.
 5. If unsure about a column name, use the semantic dictionary hints.
+6. For text/categorical filters, use ONLY values that appear in the "allowed values"
+   list for that column. Match them exactly. If the user's term is an abbreviation or
+   synonym (e.g. a business-unit code), map it to the closest allowed value.
+7. SEMANTICS OF STATUS / WORKFLOW COLUMNS:
+   - Columns describing a state, status, stage or workflow step usually contain BOTH
+     active and terminal (finished) values.
+   - "Open" / "active" / "live" / "vacant" / "to be filled" items EXCLUDE terminal
+     states. Treat values meaning cancelled, withdrawn, rejected, closed, filled,
+     hired, completed, lost or declined as NOT open (these are terminal/finished).
+   - Paused-but-not-finished states such as "on hold", "published", "draft",
+     "planning", "in progress", "pending" etc. ARE still open (the position has not
+     been filled or cancelled yet), so INCLUDE them when counting open items.
+   - "Closed" / "completed" / "finished" items mean ONLY those terminal states.
+   - Decide which allowed values are open vs terminal from their wording, then filter
+     with an explicit IN / NOT IN list of the exact allowed values.
+8. When the user asks "how many open ..." (or similar) and a status/workflow column
+   exists, prefer returning a BREAKDOWN: GROUP BY that status column with a COUNT(*),
+   keeping ONLY the open statuses, ordered by count descending. This shows the
+   composition rather than a single ambiguous number. Use a plain COUNT only when the
+   user clearly wants a single total.
+9. Do NOT sum opening/headcount columns to answer "how many open positions" unless the
+   user explicitly asks about number of openings/headcount — count requisitions/rows
+   per status instead.
 
 Available schema:
 {schema_context}
@@ -88,7 +111,9 @@ Row count: {row_count}
 Instructions:
 - Provide a direct, conversational answer to the question.
 - Reference specific numbers from the results.
-- If the results are a table with multiple rows, summarize the key findings.
+- If the results have multiple rows (e.g. a breakdown / group-by), render them as a
+  GitHub-flavored Markdown table with a header row, then add a short one-line summary
+  (such as the total) below the table.
 - Format numbers nicely (use commas for thousands).
 - Be concise but complete.
 - If the query returned no results, say so clearly.
