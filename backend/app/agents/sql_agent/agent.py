@@ -95,6 +95,7 @@ class SQLResult:
     execution_time_ms: float = 0
     explanation: str = ""
     error: str = ""
+    selected_tables: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -256,12 +257,14 @@ def run_sql_agent(
     read_conn: duckdb.DuckDBPyConnection,
     write_conn: duckdb.DuckDBPyConnection | None = None,
     history: list[dict] | None = None,
+    last_sql: str = "",
+    cached_tables: list[str] | None = None,
 ) -> SQLResult:
     """
     Full SQL agent pipeline:
     1. Retrieve metadata
-    2. Select relevant tables (schema pruning)
-    3. Generate SQL via Mistral
+    2. Select relevant tables (schema pruning) — skipped if cached_tables given
+    3. Generate SQL via Mistral (with last_sql for follow-ups)
     4. Validate SQL
     5. Execute SQL
     6. If error → repair and retry (up to MAX_RETRIES)
@@ -270,6 +273,9 @@ def run_sql_agent(
         question: User's natural language question.
         read_conn: Read-only DuckDB connection for query execution.
         write_conn: Write connection for logging (optional).
+        history: Conversation history for context.
+        last_sql: Previous SQL query (for follow-up modification).
+        cached_tables: Pre-selected tables from cache (skips table selection LLM call).
 
     Returns:
         SQLResult with query results or error info.
@@ -282,8 +288,12 @@ def run_sql_agent(
     if not metadata:
         return SQLResult(success=False, error="No data tables found. Please upload a file first.")
 
-    # 2. Select relevant tables
-    selected_tables = _select_tables(question, metadata, history=history)
+    # 2. Select relevant tables (use cache if available to skip LLM call)
+    if cached_tables and all(t in metadata for t in cached_tables):
+        selected_tables = cached_tables
+        logger.info(f"Using cached table selection: {selected_tables}")
+    else:
+        selected_tables = _select_tables(question, metadata, history=history)
     schema_context = _build_schema_context(metadata, read_conn, selected_tables)
 
     # 3. Get relationships and semantic hints
@@ -292,13 +302,14 @@ def run_sql_agent(
 
     history_context = format_history_context(history or [])
 
-    # 4. Generate SQL
+    # 4. Generate SQL (include last_sql so LLM can modify it for follow-ups)
     prompt = SQL_GENERATION.format(
         schema_context=schema_context,
         relationships=relationships_ctx,
         semantic_hints=semantic_hints,
         question=question,
         conversation_history=history_context,
+        last_sql=last_sql or "N/A (first question)",
     )
 
     response = chat(
@@ -394,6 +405,7 @@ def run_sql_agent(
                 row_count=row_count,
                 execution_time_ms=round(exec_time, 2),
                 explanation=explanation,
+                selected_tables=selected_tables,
             )
 
         except Exception as e:

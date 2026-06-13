@@ -35,6 +35,12 @@ export default function ChatWindow() {
     if (!question.trim() || isLoading) return;
 
     // Build history from the last user+assistant exchange
+    // Cap content to keep payloads small — backend also truncates, but
+    // trimming here avoids sending large bodies over the wire.
+    const HISTORY_LIMIT = 300;
+    const truncate = (text: string, limit: number) =>
+      text.length > limit ? text.slice(0, limit) + '...' : text;
+
     const history: { role: string; content: string }[] = [];
     const completedMessages = messages.filter(m => !m.isStreaming && m.content);
     if (completedMessages.length >= 2) {
@@ -42,13 +48,19 @@ export default function ChatWindow() {
       const lastMessages = completedMessages.slice(-2);
       for (const msg of lastMessages) {
         if (msg.role === 'user' || msg.role === 'assistant') {
-          history.push({ role: msg.role, content: msg.content });
+          history.push({
+            role: msg.role,
+            content: truncate(msg.content, HISTORY_LIMIT),
+          });
         }
       }
     } else if (completedMessages.length === 1) {
       const msg = completedMessages[0];
       if (msg.role === 'user' || msg.role === 'assistant') {
-        history.push({ role: msg.role, content: msg.content });
+        history.push({
+          role: msg.role,
+          content: truncate(msg.content, HISTORY_LIMIT),
+        });
       }
     }
 

@@ -17,7 +17,7 @@ from app.llm.prompts import (
     METADATA_RESPONSE,
 )
 from app.agents.sql_agent.agent import run_sql_agent, SQLResult
-from app.agents.history_utils import format_history_context
+from app.agents.history_utils import format_history_context, get_exchange_cache
 from app.ingestion.metadata_builder import get_all_metadata
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,20 @@ def _build_brief_schema(metadata: dict) -> str:
     return "\n".join(lines) or "No tables available."
 
 
+def _is_follow_up(question: str, history: list[dict]) -> bool:
+    """Quick heuristic: is this likely a follow-up referencing the last answer?"""
+    if not history:
+        return False
+    q = question.lower().strip()
+    follow_up_signals = [
+        "show me more", "more details", "filter that", "break it down",
+        "what about", "same but", "now show", "also show", "sort by",
+        "group by", "top ", "bottom ", "instead", "change that",
+        "drill down", "elaborate", "explain", "and also",
+        "how about", "can you also", "narrow", "expand",
+    ]
+    return any(sig in q for sig in follow_up_signals) or len(q.split()) <= 4
+
 
 def classify_intent(
     question: str,
@@ -44,6 +58,18 @@ def classify_intent(
     Returns:
         {"intent": str, "confidence": float, "reason": str}
     """
+    cache = get_exchange_cache()
+
+    # Fast path: if we have a valid cache and history (follow-up), reuse the
+    # cached intent instead of making an LLM call. This saves ~1-2s per request.
+    if history and cache.is_valid() and _is_follow_up(question, history):
+        logger.info(f"Intent cache hit — reusing '{cache.intent}' from last exchange")
+        return {
+            "intent": cache.intent,
+            "confidence": 0.85,
+            "reason": f"Follow-up to previous {cache.intent} question (cached)",
+        }
+
     metadata = get_all_metadata(read_conn)
     schema_context = _build_brief_schema(metadata)
 
@@ -85,8 +111,9 @@ def handle_question(
     """
     start = time.time()
     history = history or []
+    cache = get_exchange_cache()
 
-    # 1. Classify intent
+    # 1. Classify intent (may be served from cache for follow-ups)
     intent_result = classify_intent(question, read_conn, history=history)
     intent = intent_result.get("intent", "SQL_ANALYTICS")
     logger.info(f"Intent: {intent} (confidence: {intent_result.get('confidence', 0)})")
@@ -98,6 +125,17 @@ def handle_question(
     }
 
     history_context = format_history_context(history)
+
+    # Build last_sql_context for follow-ups — gives the LLM the previous SQL
+    # so it can modify/refine instead of starting from scratch.
+    last_sql_context = ""
+    if history and cache.is_valid() and cache.sql:
+        last_sql_context = cache.sql
+
+    # Reuse cached table selection for follow-ups if possible
+    cached_tables = None
+    if history and cache.is_valid() and cache.selected_tables:
+        cached_tables = cache.selected_tables
 
     # 2. Route to agent
     if intent == "GREETING":
@@ -115,9 +153,16 @@ def handle_question(
             temperature=0.2,
             max_tokens=1024,
         )
+        # Update cache
+        cache.update(question=question, intent=intent)
 
     elif intent == "SQL_ANALYTICS":
-        sql_result = run_sql_agent(question, read_conn, write_conn, history=history)
+        sql_result = run_sql_agent(
+            question, read_conn, write_conn,
+            history=history,
+            last_sql=last_sql_context,
+            cached_tables=cached_tables,
+        )
         response_data["sql_result"] = sql_result.to_dict()
 
         if sql_result.success:
@@ -134,6 +179,14 @@ def handle_question(
                 temperature=0.2,
                 max_tokens=1024,
             )
+            # Update cache with successful result
+            cache.update(
+                question=question,
+                intent=intent,
+                sql=sql_result.sql,
+                result_summary=sql_result.results_as_text(),
+                selected_tables=sql_result.selected_tables,
+            )
         else:
             response_data["answer"] = (
                 f"I wasn't able to answer that question. "
@@ -143,7 +196,12 @@ def handle_question(
 
     else:
         # Default: try SQL
-        sql_result = run_sql_agent(question, read_conn, write_conn, history=history)
+        sql_result = run_sql_agent(
+            question, read_conn, write_conn,
+            history=history,
+            last_sql=last_sql_context,
+            cached_tables=cached_tables,
+        )
         response_data["sql_result"] = sql_result.to_dict()
         if sql_result.success:
             prompt = RESPONSE_FORMAT.format(
@@ -157,6 +215,13 @@ def handle_question(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
                 max_tokens=1024,
+            )
+            cache.update(
+                question=question,
+                intent=intent,
+                sql=sql_result.sql,
+                result_summary=sql_result.results_as_text(),
+                selected_tables=sql_result.selected_tables,
             )
         else:
             response_data["answer"] = f"I couldn't process that question. Error: {sql_result.error}"

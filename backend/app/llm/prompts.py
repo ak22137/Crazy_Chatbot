@@ -78,8 +78,9 @@ IMPORTANT RULES:
    per status instead.
 10. FOLLOW-UP QUESTIONS: If the user's question references the previous conversation
     (e.g. "show me more details", "filter that by department", "now break it down by
-    region", "what about the top 5?"), use the conversation history below to understand
-    what data/table/query they are referring to and generate the appropriate SQL.
+    region", "what about the top 5?"), use the conversation history AND the previous
+    SQL query below to understand what data/table/query they are referring to. You can
+    modify the previous SQL instead of starting from scratch.
 
 Available schema:
 {schema_context}
@@ -92,6 +93,9 @@ Semantic hints (columns that mean the same thing):
 
 Previous conversation (for context):
 {conversation_history}
+
+Previous SQL query (modify this for follow-up questions):
+{last_sql}
 
 User question: {question}
 
