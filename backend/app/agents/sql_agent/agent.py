@@ -15,6 +15,7 @@ import duckdb
 
 from app.llm.mistral_client import chat, parse_json_response
 from app.llm.prompts import SQL_GENERATION, SQL_REPAIR, TABLE_SELECTION
+from app.agents.history_utils import format_history_context
 from app.agents.sql_agent.sql_validator import validate_sql
 from app.ingestion.metadata_builder import get_all_metadata
 
@@ -222,15 +223,18 @@ def _get_semantic_hints(conn: duckdb.DuckDBPyConnection) -> str:
         return "No semantic hints available."
 
 
-def _select_tables(question: str, metadata: dict) -> list[str]:
+def _select_tables(question: str, metadata: dict, history: list[dict] | None = None) -> list[str]:
     """Use LLM to select relevant tables for the question."""
     if len(metadata) <= 3:
         # If few tables, just use all of them
         return list(metadata.keys())
 
+    history_context = format_history_context(history or [])
+
     prompt = TABLE_SELECTION.format(
         table_summaries=_build_table_summaries(metadata),
         question=question,
+        conversation_history=history_context,
     )
 
     response = chat(
@@ -251,6 +255,7 @@ def run_sql_agent(
     question: str,
     read_conn: duckdb.DuckDBPyConnection,
     write_conn: duckdb.DuckDBPyConnection | None = None,
+    history: list[dict] | None = None,
 ) -> SQLResult:
     """
     Full SQL agent pipeline:
@@ -278,12 +283,14 @@ def run_sql_agent(
         return SQLResult(success=False, error="No data tables found. Please upload a file first.")
 
     # 2. Select relevant tables
-    selected_tables = _select_tables(question, metadata)
+    selected_tables = _select_tables(question, metadata, history=history)
     schema_context = _build_schema_context(metadata, read_conn, selected_tables)
 
     # 3. Get relationships and semantic hints
     relationships_ctx = _get_relationships_context(read_conn)
     semantic_hints = _get_semantic_hints(read_conn)
+
+    history_context = format_history_context(history or [])
 
     # 4. Generate SQL
     prompt = SQL_GENERATION.format(
@@ -291,6 +298,7 @@ def run_sql_agent(
         relationships=relationships_ctx,
         semantic_hints=semantic_hints,
         question=question,
+        conversation_history=history_context,
     )
 
     response = chat(

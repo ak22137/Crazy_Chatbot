@@ -26,7 +26,7 @@ export const api = {
   /**
    * Send a chat question (synchronous).
    */
-  async chat(question: string): Promise<{
+  async chat(question: string, history: { role: string; content: string }[] = []): Promise<{
     intent: string;
     answer: string;
     sql_result?: any;
@@ -35,7 +35,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/api/v1/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, history }),
     });
 
     if (!res.ok) {
@@ -55,6 +55,7 @@ export const api = {
     onEvent: (event: { type: string; data: any }) => void,
     onError: (error: Error) => void,
     onDone: () => void,
+    history: { role: string; content: string }[] = [],
   ): () => void {
     const controller = new AbortController();
 
@@ -63,7 +64,7 @@ export const api = {
         const res = await fetch(`${API_BASE}/api/v1/chat/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question, history }),
           signal: controller.signal,
         });
 

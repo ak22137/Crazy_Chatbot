@@ -17,6 +17,7 @@ from app.llm.prompts import (
     METADATA_RESPONSE,
 )
 from app.agents.sql_agent.agent import run_sql_agent, SQLResult
+from app.agents.history_utils import format_history_context
 from app.ingestion.metadata_builder import get_all_metadata
 
 logger = logging.getLogger(__name__)
@@ -30,20 +31,6 @@ def _build_brief_schema(metadata: dict) -> str:
         lines.append(f"- {tbl} ({info['row_count']} rows): {', '.join(cols)}")
     return "\n".join(lines) or "No tables available."
 
-
-def _format_history_context(history: list[dict]) -> str:
-    """Format conversation history into a readable string for prompt injection."""
-    if not history:
-        return ""
-    lines = []
-    for msg in history:
-        role_label = "User" if msg["role"] == "user" else "Assistant"
-        # Truncate long assistant responses to keep the prompt focused
-        content = msg["content"]
-        if msg["role"] == "assistant" and len(content) > 500:
-            content = content[:500] + "..."
-        lines.append(f"{role_label}: {content}")
-    return "\n".join(lines)
 
 
 def classify_intent(
@@ -60,7 +47,7 @@ def classify_intent(
     metadata = get_all_metadata(read_conn)
     schema_context = _build_brief_schema(metadata)
 
-    history_context = _format_history_context(history or [])
+    history_context = format_history_context(history or [])
 
     prompt = INTENT_CLASSIFICATION.format(
         schema_context=schema_context,
@@ -110,7 +97,7 @@ def handle_question(
         "sql_result": None,
     }
 
-    history_context = _format_history_context(history)
+    history_context = format_history_context(history)
 
     # 2. Route to agent
     if intent == "GREETING":

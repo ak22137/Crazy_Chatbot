@@ -12,8 +12,15 @@ Classify the user's question into exactly ONE category:
 - METADATA: Questions about what data is available, what tables exist, what columns are in a table, schema questions. Examples: "What tables do I have?", "Show me the columns", "What data is available?"
 - GREETING: Greetings, help requests, or general conversation. Examples: "Hello", "Help", "What can you do?"
 
+IMPORTANT: If the user's question is a follow-up that refers to the previous conversation
+(e.g. "show me more", "filter that", "break it down", "what about X?"), use the conversation
+history below to understand what they are referring to and classify accordingly.
+
 Available tables and their columns:
 {schema_context}
+
+Previous conversation (for context):
+{conversation_history}
 
 User question: {question}
 
@@ -23,8 +30,14 @@ Respond with ONLY a JSON object:
 
 TABLE_SELECTION = """You are a data analyst. Given the user's question and the available tables, select which tables are needed to answer the question.
 
+If the question is a follow-up referring to the previous conversation, use the history to
+understand which tables were being discussed.
+
 Available tables:
 {table_summaries}
+
+Previous conversation (for context):
+{conversation_history}
 
 User question: {question}
 
@@ -63,6 +76,10 @@ IMPORTANT RULES:
 9. Do NOT sum opening/headcount columns to answer "how many open positions" unless the
    user explicitly asks about number of openings/headcount — count requisitions/rows
    per status instead.
+10. FOLLOW-UP QUESTIONS: If the user's question references the previous conversation
+    (e.g. "show me more details", "filter that by department", "now break it down by
+    region", "what about the top 5?"), use the conversation history below to understand
+    what data/table/query they are referring to and generate the appropriate SQL.
 
 Available schema:
 {schema_context}
@@ -72,6 +89,9 @@ Relationships between tables:
 
 Semantic hints (columns that mean the same thing):
 {semantic_hints}
+
+Previous conversation (for context):
+{conversation_history}
 
 User question: {question}
 
@@ -98,6 +118,9 @@ Generate a corrected query. Respond with ONLY a JSON object:
 
 RESPONSE_FORMAT = """You are a helpful data analyst assistant. Given the user's question, the SQL query that was executed, and the results, provide a clear and helpful natural language response.
 
+Previous conversation (for context):
+{conversation_history}
+
 User question: {question}
 
 SQL query executed:
@@ -110,6 +133,7 @@ Row count: {row_count}
 
 Instructions:
 - Provide a direct, conversational answer to the question.
+- If this is a follow-up question, relate your answer to the previous conversation context.
 - Reference specific numbers from the results.
 - If the results have multiple rows (e.g. a breakdown / group-by), render them as a
   GitHub-flavored Markdown table with a header row, then add a short one-line summary
@@ -122,9 +146,13 @@ Instructions:
 
 METADATA_RESPONSE = """You are a helpful data analyst assistant. The user is asking about their uploaded data.
 
+Previous conversation (for context):
+{conversation_history}
+
 Available data:
 {metadata}
 
 User question: {question}
 
 Provide a clear, helpful response describing the available data. Be specific about table names, column names, row counts, and data types."""
+

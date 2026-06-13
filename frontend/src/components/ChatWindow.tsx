@@ -34,6 +34,24 @@ export default function ChatWindow() {
   const sendMessage = useCallback(async (question: string) => {
     if (!question.trim() || isLoading) return;
 
+    // Build history from the last user+assistant exchange
+    const history: { role: string; content: string }[] = [];
+    const completedMessages = messages.filter(m => !m.isStreaming && m.content);
+    if (completedMessages.length >= 2) {
+      // Get the last user and assistant messages
+      const lastMessages = completedMessages.slice(-2);
+      for (const msg of lastMessages) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          history.push({ role: msg.role, content: msg.content });
+        }
+      }
+    } else if (completedMessages.length === 1) {
+      const msg = completedMessages[0];
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        history.push({ role: msg.role, content: msg.content });
+      }
+    }
+
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -102,20 +120,21 @@ export default function ChatWindow() {
         },
         (error) => {
           // Fallback to sync if SSE fails
-          handleSyncFallback(question, assistantMsg.id);
+          handleSyncFallback(question, assistantMsg.id, history);
         },
         () => {
           setIsLoading(false);
-        }
+        },
+        history,
       );
     } catch {
       setIsLoading(false);
     }
-  }, [isLoading]);
+  }, [isLoading, messages]);
 
-  const handleSyncFallback = async (question: string, msgId: string) => {
+  const handleSyncFallback = async (question: string, msgId: string, history: { role: string; content: string }[] = []) => {
     try {
-      const result = await api.chat(question);
+      const result = await api.chat(question, history);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === msgId
