@@ -31,7 +31,26 @@ def _build_brief_schema(metadata: dict) -> str:
     return "\n".join(lines) or "No tables available."
 
 
-def classify_intent(question: str, read_conn: duckdb.DuckDBPyConnection) -> dict:
+def _format_history_context(history: list[dict]) -> str:
+    """Format conversation history into a readable string for prompt injection."""
+    if not history:
+        return ""
+    lines = []
+    for msg in history:
+        role_label = "User" if msg["role"] == "user" else "Assistant"
+        # Truncate long assistant responses to keep the prompt focused
+        content = msg["content"]
+        if msg["role"] == "assistant" and len(content) > 500:
+            content = content[:500] + "..."
+        lines.append(f"{role_label}: {content}")
+    return "\n".join(lines)
+
+
+def classify_intent(
+    question: str,
+    read_conn: duckdb.DuckDBPyConnection,
+    history: list[dict] | None = None,
+) -> dict:
     """
     Classify the user's question intent.
 
@@ -41,9 +60,12 @@ def classify_intent(question: str, read_conn: duckdb.DuckDBPyConnection) -> dict
     metadata = get_all_metadata(read_conn)
     schema_context = _build_brief_schema(metadata)
 
+    history_context = _format_history_context(history or [])
+
     prompt = INTENT_CLASSIFICATION.format(
         schema_context=schema_context,
         question=question,
+        conversation_history=history_context,
     )
 
     response = chat(
@@ -63,6 +85,7 @@ def handle_question(
     question: str,
     read_conn: duckdb.DuckDBPyConnection,
     write_conn: duckdb.DuckDBPyConnection,
+    history: list[dict] | None = None,
 ) -> dict:
     """
     Full synchronous question handling pipeline.
@@ -74,9 +97,10 @@ def handle_question(
         - metadata: metadata info (if METADATA)
     """
     start = time.time()
+    history = history or []
 
     # 1. Classify intent
-    intent_result = classify_intent(question, read_conn)
+    intent_result = classify_intent(question, read_conn, history=history)
     intent = intent_result.get("intent", "SQL_ANALYTICS")
     logger.info(f"Intent: {intent} (confidence: {intent_result.get('confidence', 0)})")
 
@@ -85,6 +109,8 @@ def handle_question(
         "answer": "",
         "sql_result": None,
     }
+
+    history_context = _format_history_context(history)
 
     # 2. Route to agent
     if intent == "GREETING":
@@ -95,6 +121,7 @@ def handle_question(
         prompt = METADATA_RESPONSE.format(
             metadata=json.dumps(metadata, indent=2, default=str),
             question=question,
+            conversation_history=history_context,
         )
         response_data["answer"] = chat(
             messages=[{"role": "user", "content": prompt}],
@@ -103,7 +130,7 @@ def handle_question(
         )
 
     elif intent == "SQL_ANALYTICS":
-        sql_result = run_sql_agent(question, read_conn, write_conn)
+        sql_result = run_sql_agent(question, read_conn, write_conn, history=history)
         response_data["sql_result"] = sql_result.to_dict()
 
         if sql_result.success:
@@ -113,6 +140,7 @@ def handle_question(
                 sql=sql_result.sql,
                 results=sql_result.results_as_text(),
                 row_count=sql_result.row_count,
+                conversation_history=history_context,
             )
             response_data["answer"] = chat(
                 messages=[{"role": "user", "content": prompt}],
@@ -128,7 +156,7 @@ def handle_question(
 
     else:
         # Default: try SQL
-        sql_result = run_sql_agent(question, read_conn, write_conn)
+        sql_result = run_sql_agent(question, read_conn, write_conn, history=history)
         response_data["sql_result"] = sql_result.to_dict()
         if sql_result.success:
             prompt = RESPONSE_FORMAT.format(
@@ -136,6 +164,7 @@ def handle_question(
                 sql=sql_result.sql,
                 results=sql_result.results_as_text(),
                 row_count=sql_result.row_count,
+                conversation_history=history_context,
             )
             response_data["answer"] = chat(
                 messages=[{"role": "user", "content": prompt}],
@@ -170,3 +199,4 @@ def _handle_greeting(question: str) -> str:
         "Upload a file using the upload button, then ask me questions about your data. "
         "I use SQL to give you accurate, deterministic answers — no guessing."
     )
+

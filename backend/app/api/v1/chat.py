@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
+class HistoryMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str
+    history: list[HistoryMessage] = []
 
 
 class ChatResponse(BaseModel):
@@ -42,9 +48,10 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     write_conn = get_write_connection()
+    history = [{"role": h.role, "content": h.content} for h in request.history]
 
     with read_connection() as read_conn:
-        result = handle_question(request.question, read_conn, write_conn)
+        result = handle_question(request.question, read_conn, write_conn, history=history)
 
     return ChatResponse(**result)
 
@@ -65,12 +72,14 @@ async def chat_stream_endpoint(request: ChatRequest):
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
+    history = [{"role": h.role, "content": h.content} for h in request.history]
+
     async def event_stream():
         try:
             write_conn = get_write_connection()
 
             with read_connection() as read_conn:
-                result = handle_question(request.question, read_conn, write_conn)
+                result = handle_question(request.question, read_conn, write_conn, history=history)
 
             # Send intent
             yield f"data: {json.dumps({'type': 'intent', 'data': result['intent']})}\n\n"
